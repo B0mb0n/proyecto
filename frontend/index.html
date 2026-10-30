@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vulnerability Scanner</title>
+  <link rel="icon" href="avatar.jpg">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img class="logo" src="avatar.jpg" alt="avatar">
+      <div>
+        <h1>VULN<span>SCAN</span></h1>
+        <p>脆弱性スキャナー · Go · Consul · Kafka</p>
+      </div>
+    </div>
+    <span id="gateway" class="pill pill-wait">Gateway…</span>
+  </header>
+
+  <main class="layout">
+    <!-- Formulario -->
+    <section class="card">
+      <h2>Nueva solicitud</h2>
+
+      <label class="field">
+        <span>Objetivo (target)</span>
+        <input id="target" value="192.168.1.20" autocomplete="off">
+      </label>
+
+      <span class="field-title">Módulos · cola de Kafka</span>
+      <div class="modules">
+        <label class="module"><input type="checkbox" value="port_scan" checked>
+          <div><strong>Port Scan</strong><code>scan.port_scan</code></div></label>
+        <label class="module"><input type="checkbox" value="http_scan" checked>
+          <div><strong>HTTP Scan</strong><code>scan.http_scan</code></div></label>
+        <label class="module"><input type="checkbox" value="tls_scan" checked>
+          <div><strong>TLS Scan</strong><code>scan.tls_scan</code></div></label>
+      </div>
+
+      <button id="scanBtn" class="btn">Encolar escaneo</button>
+      <p class="hint">El middleware publica un trabajo por módulo y responde de inmediato; los servicios lo procesan de forma asíncrona.</p>
+    </section>
+
+    <!-- Estado del trabajo actual -->
+    <section class="card">
+      <div class="card-head">
+        <h2>Trabajo actual</h2>
+        <span id="jobId" class="muted">—</span>
+      </div>
+      <div id="pipeline" class="empty">Aún no hay trabajos. Encola un escaneo para ver cómo viaja por Kafka.</div>
+    </section>
+
+    <!-- Historial -->
+    <section class="card wide">
+      <h2>Historial</h2>
+      <table>
+        <thead><tr><th>Job</th><th>Target</th><th>Módulos</th><th>Estado</th><th>Duración</th></tr></thead>
+        <tbody id="history"><tr><td colspan="5" class="muted">Sin trabajos todavía.</td></tr></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

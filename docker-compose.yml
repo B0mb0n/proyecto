@@ -1,0 +1,213 @@
+services:
+
+  # ---------- Frontend ----------
+  frontend:
+    build: ./frontend
+    container_name: frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - nginx-gateway
+
+  # ---------- Reverse proxy / Load balancer (nginx) ----------
+  # Único punto de entrada: el frontend le habla a este contenedor (8080)
+  # y él reparte entre los middlewares.
+  nginx-gateway:
+    build: ./nginx-gateway
+    container_name: nginx-gateway
+    ports:
+      - "8080:80"
+    depends_on:
+      - middleware-1
+      - middleware-2
+
+  # ---------- Middleware (descubre servicios en Consul + load balancer gRPC), 2 réplicas ----------
+  # Ya no publican puertos al host: solo nginx-gateway puede llegar a ellos.
+
+  middleware-1:
+    build:
+      context: .
+      dockerfile: middleware/Dockerfile
+    container_name: middleware-1
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      consul:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  middleware-2:
+    build:
+      context: .
+      dockerfile: middleware/Dockerfile
+    container_name: middleware-2
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      consul:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ---------- Consul (service registry + health checks) ----------
+  # Modo dev: un solo nodo, en memoria. UI en http://localhost:8500/ui
+
+  consul:
+    image: hashicorp/consul:latest
+    container_name: consul
+    command: "agent -dev -client=0.0.0.0 -ui"
+    ports:
+      - "8500:8500"
+
+  # ---------- Kafka (cola de mensajería asíncrona) ----------
+  # Un solo nodo en modo KRaft (sin ZooKeeper). Solo se usa dentro de la red de Docker.
+
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
+      retries: 20
+
+  # Contenedor de un solo uso: crea los tópicos (uno por servicio + resultados) y termina.
+  # 3 particiones por tópico: es el máximo de consumidores que pueden trabajar en paralelo.
+
+  kafka-init:
+    image: apache/kafka:3.8.0
+    container_name: kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        for t in scan.port_scan scan.http_scan scan.tls_scan scan.results; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic $$t --partitions 3 --replication-factor 1
+        done
+
+  # ---------- Backend: port-scan (2 réplicas) ----------
+  port-scan-1:
+    build:
+      context: .
+      dockerfile: services/port-scan/Dockerfile
+    container_name: port-scan-1
+    ports:
+      - "9001:9001"   # solo para probar con grpcurl
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      SERVICE_NAME: port_scan
+      INSTANCE_ID: port-scan-1
+      SERVICE_PORT: 9001
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      db:
+        condition: service_healthy
+      consul:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  port-scan-2:
+    build:
+      context: .
+      dockerfile: services/port-scan/Dockerfile
+    container_name: port-scan-2
+    ports:
+      - "9004:9001"   # solo para probar con grpcurl
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      SERVICE_NAME: port_scan
+      INSTANCE_ID: port-scan-2
+      SERVICE_PORT: 9001
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      db:
+        condition: service_healthy
+      consul:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ---------- Backend: http-scan ----------
+  http-scan-1:
+    build:
+      context: .
+      dockerfile: services/http-scan/Dockerfile
+    container_name: http-scan-1
+    ports:
+      - "9002:9002"   # solo para probar con grpcurl
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      SERVICE_NAME: http_scan
+      INSTANCE_ID: http-scan-1
+      SERVICE_PORT: 9002
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      db:
+        condition: service_healthy
+      consul:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ---------- Backend: tls-scan ----------
+  tls-scan-1:
+    build:
+      context: .
+      dockerfile: services/tls-scan/Dockerfile
+    container_name: tls-scan-1
+    ports:
+      - "9003:9003"   # solo para probar con grpcurl
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      SERVICE_NAME: tls_scan
+      INSTANCE_ID: tls-scan-1
+      SERVICE_PORT: 9003
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      db:
+        condition: service_healthy
+      consul:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+
+  # ---------- Base de datos compartida ----------
+  db:
+    image: postgres:16-alpine
+    container_name: monolito-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: monolito
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data:

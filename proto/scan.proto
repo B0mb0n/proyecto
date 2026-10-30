@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package scan;
+
+option go_package = "monolito/proto/scanpb";
+
+// Contrato único que implementan los 3 servicios (port_scan, http_scan, tls_scan).
+// El middleware (load balancer) lo llama sin saber qué módulo hay detrás.
+service ScanService {
+  rpc Scan(ScanRequest) returns (ScanResponse);
+}
+
+message ScanRequest {
+  string target = 1;
+}
+
+message ScanResponse {
+  string module = 1;
+  string target = 2;
+  string output = 3;
+}
+
+// Mensajes que viajan por Kafka (serializados con protobuf, no JSON).
+
+// Trabajo que el middleware publica en la cola scan.<módulo>.
+message ScanJob {
+  string job_id = 1;
+  string target = 2;
+}
+
+// Resultado que el servicio publica en scan.results al terminar.
+message ScanResult {
+  string job_id    = 1;
+  string module    = 2;
+  string target    = 3;
+  string output    = 4;
+  string worker    = 5;  // réplica que lo procesó
+  int32  partition = 6;  // partición de Kafka de la que salió el trabajo
+  int64  offset    = 7;
+}
